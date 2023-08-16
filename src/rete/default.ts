@@ -26,7 +26,7 @@ import {
 } from 'rete-connection-reroute-plugin';
 import { DockPlugin, DockPresets } from 'rete-dock-plugin';
 import CustomButton from '../components/CustomButton.vue';
-
+import * as formulajs from '@formulajs/formulajs';
 type Node = NumberNode | AddNode | SumNode;
 type Conn =
   | Connection<NumberNode, AddNode>
@@ -124,9 +124,13 @@ class ButtonControl extends Classic.Control {
 class SumNode extends Classic.Node<
   Record<string, Classic.Socket>,
   { value: Classic.Socket },
-  { value: Classic.InputControl<'number'>; addInput: ButtonControl }
+  {
+    operation: Classic.InputControl<'text'>;
+    value: Classic.InputControl<'number'>;
+    addInput: ButtonControl;
+  }
 > {
-  height = 220;
+  height = 180;
   width = 180;
 
   private inputControls: Classic.InputControl<'number'>[] = [];
@@ -136,54 +140,42 @@ class SumNode extends Classic.Node<
     private area?: AreaPlugin<Schemes, AreaExtra>
   ) {
     super('Sum');
-
     this.addControl(
-      'value',
+      `operation`,
+      new Classic.InputControl('text', {
+        initial: 'SUM',
+        change
+      })
+    );
+    this.addControl(
+      `value`,
       new Classic.InputControl('number', {
         readonly: true,
       })
     );
-    this.addOutput('value', new Classic.Output(socket, 'Number'));
 
-    const addButton = new ButtonControl('Add Input', () => {
-      console.log('add input clicked');
-      this.addNewInput(change);
-    });
+    const inputName = 'Input';
+    const input = new Classic.Input(socket, inputName, true);
 
-    this.addControl('addInput', addButton);
-  }
+    // input.addControl(inputControl);
 
-  private addNewInput(change?: () => void) {
-    const inputName = `input${this.inputControls.length}`;
-    alert(inputName);
-    const inputControl = new Classic.InputControl('number', {
-      initial: 0,
-      change,
-    });
-    const input = new Classic.Input(socket, inputName);
-
-    input.addControl(inputControl);
-
-    this.inputControls.push(inputControl);
     this.addInput(inputName, input);
-    this.area?.update('node', this.id);
+
+    this.addOutput('value', new Classic.Output(socket, 'Number'));
   }
 
-  data(inputs: Record<string, number[]>): { value: number } {
-    let sum = 0;
+  data(inputs: Record<string, number[]>): { value: number | undefined } {
+    let fn = (formulajs as unknown as Record<string, any>)[
+      this.controls.operation.value as string
+    ];
+    if (!fn) {
+      return { value: this.controls.value.value };
+    }
+    const val = fn(...inputs.Input);
 
-    this.inputControls.forEach((control, index) => {
-      const inputName = `input${index}`;
-      const inputValue = inputs[inputName]
-        ? inputs[inputName][0]
-        : control.value || 0;
+    this.controls.value.setValue(val);
 
-      sum += inputValue;
-    });
-
-    this.controls.value.setValue(sum);
-
-    return { value: sum };
+    return { value: val };
   }
 }
 

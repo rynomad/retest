@@ -7,6 +7,7 @@
     "build": "vue-cli-service build"
   },
   "dependencies": {
+    "@formulajs/formulajs": "^4.3.0",
     "@types/three": "^0.155.0",
     "elkjs": "^0.8.2",
     "rete": "^2.0.2",
