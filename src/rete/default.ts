@@ -139,7 +139,7 @@ class SumNode extends Classic.Node<
     change?: () => void,
     private area?: AreaPlugin<Schemes, AreaExtra>
   ) {
-    super('Sum');
+    super('Formula');
     this.addControl(
       `operation`,
       new Classic.InputControl('text', {
