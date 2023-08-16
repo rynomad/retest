@@ -9,7 +9,10 @@ import {
   AutoArrangePlugin,
   Presets as ArrangePresets,
 } from 'rete-auto-arrange-plugin';
-import { ReadonlyPlugin } from 'rete-readonly-plugin';
+import {
+  ConnectionPlugin,
+  Presets as ConnectionPresets,
+} from 'rete-connection-plugin';
 import {
   ContextMenuPlugin,
   ContextMenuExtra,
@@ -21,8 +24,10 @@ import {
   RerouteExtra,
   RerouteExtensions,
 } from 'rete-connection-reroute-plugin';
+import { DockPlugin, DockPresets } from 'rete-dock-plugin';
+import CustomButton from '../components/CustomButton.vue';
 
-type Node = NumberNode | AddNode;
+type Node = NumberNode | AddNode | SumNode;
 type Conn =
   | Connection<NumberNode, AddNode>
   | Connection<AddNode, AddNode>
@@ -33,6 +38,8 @@ class Connection<A extends Node, B extends Node> extends Classic.Connection<
   A,
   B
 > {}
+
+const socket = new Classic.Socket('socket');
 
 class NumberNode extends Classic.Node implements DataflowNode {
   width = 180;
@@ -57,30 +64,126 @@ class NumberNode extends Classic.Node implements DataflowNode {
   }
 }
 
-class AddNode extends Classic.Node implements DataflowNode {
+class AddNode extends Classic.Node<
+  { left: Classic.Socket; right: Classic.Socket },
+  { value: Classic.Socket },
+  { value: Classic.InputControl<'number'> }
+> {
+  height = 190;
   width = 180;
-  height = 195;
 
-  constructor() {
+  constructor(
+    change?: () => void,
+    private update?: (control: Classic.InputControl<'number'>) => void
+  ) {
     super('Add');
+    const left = new Classic.Input(socket, 'Left');
+    const right = new Classic.Input(socket, 'Right');
 
-    this.addInput('a', new Classic.Input(socket, 'A'));
-    this.addInput('b', new Classic.Input(socket, 'B'));
-    this.addOutput('value', new Classic.Output(socket, 'Number'));
-    this.addControl(
-      'result',
-      new Classic.InputControl('number', { initial: 0, readonly: true })
+    left.addControl(new Classic.InputControl('number', { initial: 0, change }));
+    right.addControl(
+      new Classic.InputControl('number', { initial: 0, change })
     );
+
+    this.addInput('left', left);
+    this.addInput('right', right);
+    this.addControl(
+      'value',
+      new Classic.InputControl('number', {
+        readonly: true,
+      })
+    );
+    this.addOutput('value', new Classic.Output(socket, 'Number'));
   }
-  data(inputs: { a?: number[]; b?: number[] }) {
-    const { a = [], b = [] } = inputs;
-    const sum = (a[0] || 0) + (b[0] || 0);
 
-    (this.controls['result'] as Classic.InputControl<'number'>).setValue(sum);
+  data(inputs: { left?: number[]; right?: number[] }): { value: number } {
+    const leftControl = this.inputs.left
+      ?.control as Classic.InputControl<'number'>;
+    const rightControl = this.inputs.right
+      ?.control as Classic.InputControl<'number'>;
 
-    return {
-      value: sum,
-    };
+    const { left, right } = inputs;
+    const value =
+      (left ? left[0] : leftControl.value || 0) +
+      (right ? right[0] : rightControl.value || 0);
+
+    this.controls.value.setValue(value);
+
+    if (this.update) this.update(this.controls.value);
+
+    return { value };
+  }
+}
+
+class ButtonControl extends Classic.Control {
+  constructor(public label: string, public onClick: () => void) {
+    super();
+  }
+}
+
+class SumNode extends Classic.Node<
+  Record<string, Classic.Socket>,
+  { value: Classic.Socket },
+  { value: Classic.InputControl<'number'>; addInput: ButtonControl }
+> {
+  height = 220;
+  width = 180;
+
+  private inputControls: Classic.InputControl<'number'>[] = [];
+
+  constructor(
+    change?: () => void,
+    private area?: AreaPlugin<Schemes, AreaExtra>
+  ) {
+    super('Sum');
+
+    this.addControl(
+      'value',
+      new Classic.InputControl('number', {
+        readonly: true,
+      })
+    );
+    this.addOutput('value', new Classic.Output(socket, 'Number'));
+
+    const addButton = new ButtonControl('Add Input', () => {
+      console.log('add input clicked');
+      this.addNewInput(change);
+    });
+
+    this.addControl('addInput', addButton);
+  }
+
+  private addNewInput(change?: () => void) {
+    const inputName = `input${this.inputControls.length}`;
+    alert(inputName);
+    const inputControl = new Classic.InputControl('number', {
+      initial: 0,
+      change,
+    });
+    const input = new Classic.Input(socket, inputName);
+
+    input.addControl(inputControl);
+
+    this.inputControls.push(inputControl);
+    this.addInput(inputName, input);
+    this.area?.update('node', this.id);
+  }
+
+  data(inputs: Record<string, number[]>): { value: number } {
+    let sum = 0;
+
+    this.inputControls.forEach((control, index) => {
+      const inputName = `input${index}`;
+      const inputValue = inputs[inputName]
+        ? inputs[inputName][0]
+        : control.value || 0;
+
+      sum += inputValue;
+    });
+
+    this.controls.value.setValue(sum);
+
+    return { value: sum };
   }
 }
 
@@ -91,36 +194,55 @@ type AreaExtra =
   | MinimapExtra
   | RerouteExtra;
 
-const socket = new Classic.Socket('socket');
-
 export async function createEditor(container: HTMLElement) {
   const editor = new NodeEditor<Schemes>();
   const area = new AreaPlugin<Schemes, AreaExtra>(container);
 
   const vueRender = new VuePlugin<Schemes, AreaExtra>();
 
-  const readonly = new ReadonlyPlugin<Schemes>();
   const contextMenu = new ContextMenuPlugin<Schemes>({
     items: ContextMenuPresets.classic.setup([
       ['Number', () => new NumberNode(1, process)],
-      ['Add', () => new AddNode()],
+      ['Add', () => new AddNode(process)],
     ]),
   });
   const minimap = new MinimapPlugin<Schemes>();
   const reroutePlugin = new ReroutePlugin<Schemes>();
+  const dock = new DockPlugin<Schemes>();
+  const connection = new ConnectionPlugin<Schemes, AreaExtra>();
+  connection.addPreset(ConnectionPresets.classic.setup());
 
-  editor.use(readonly.root);
+  dock.addPreset(DockPresets.classic.setup({ area, size: 100, scale: 0.6 }));
+
+  // editor.use(readonly.root);
   editor.use(area);
-  area.use(readonly.area);
+  // area.use(readonly.area);
 
   area.use(vueRender);
 
   area.use(contextMenu);
   area.use(minimap);
-
+  area.use(dock);
+  area.use(connection);
+  dock.add(() => new NumberNode(0, process));
+  dock.add(() => new AddNode(process));
+  dock.add(() => new SumNode(process, area));
   vueRender.use(reroutePlugin);
 
-  vueRender.addPreset(VuePresets.classic.setup());
+  vueRender.addPreset(
+    VuePresets.classic.setup({
+      customize: {
+        control(data) {
+          if (data.payload instanceof ButtonControl) {
+            return CustomButton;
+          }
+          if (data.payload instanceof Classic.InputControl) {
+            return VuePresets.classic.Control;
+          }
+        },
+      },
+    })
+  );
   vueRender.addPreset(VuePresets.contextMenu.setup());
   vueRender.addPreset(VuePresets.minimap.setup());
   vueRender.addPreset(
@@ -141,17 +263,6 @@ export async function createEditor(container: HTMLElement) {
   const dataflow = new DataflowEngine<Schemes>();
 
   editor.use(dataflow);
-
-  const a = new NumberNode(1, process);
-  const b = new NumberNode(1, process);
-  const add = new AddNode();
-
-  await editor.addNode(a);
-  await editor.addNode(b);
-  await editor.addNode(add);
-
-  await editor.addConnection(new Connection(a, 'value', add, 'a'));
-  await editor.addConnection(new Connection(b, 'value', add, 'b'));
 
   const arrange = new AutoArrangePlugin<Schemes>();
 
@@ -174,19 +285,16 @@ export async function createEditor(container: HTMLElement) {
   async function process() {
     dataflow.reset();
 
-    editor
-      .getNodes()
-      .filter((node) => node instanceof AddNode)
-      .forEach(async (node) => {
-        const sum = await dataflow.fetch(node.id);
+    editor.getNodes().forEach(async (node) => {
+      const sum = await dataflow.fetch(node.id);
 
-        console.log(node.id, 'produces', sum);
+      console.log(node.id, 'produces', sum);
 
-        area.update(
-          'control',
-          (node.controls['result'] as Classic.InputControl<'number'>).id
-        );
-      });
+      area.update(
+        'control',
+        (node.controls['value'] as Classic.InputControl<'number'>).id
+      );
+    });
   }
 
   editor.addPipe((context) => {
@@ -195,13 +303,12 @@ export async function createEditor(container: HTMLElement) {
       context.type === 'connectionremoved'
     ) {
       process();
+      // arrange.layout();
     }
     return context;
   });
 
   process();
-
-  readonly.enable();
 
   return {
     destroy: () => area.destroy(),
